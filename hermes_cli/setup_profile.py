@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Callable, NamedTuple, Optional
 
 from hermes_cli import profiles as profiles_mod
-from hermes_constants import get_hermes_home
+from hermes_constants import get_hermes_home, profile_name_for_home
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ SETUP_CHAT_TITLE = "Welcome to Hermes"
 MAX_FAILED_STARTS = 3
 _FRESH_STATE = {"intro": "unseen", "failed_starts": 0}
 _SETUP_TOOLSETS = ["setup", "start_chat", "connections", "no_mcp"]
-_SETUP_DISABLED_TOOLSETS = ["project"]
+_SETUP_DISABLED_TOOLSETS = ["project", "catalog"]
 _SETUP_DEFERRED_TOOLS = [
     "computer_use", "session_search", "image_generate", "todo_list", "process_manage", "cronjob_manage",
     "drive_preview", "desktop_preview", "annotate_preview", "show_tip", "desktop_project",
@@ -98,6 +98,14 @@ def reset_setup_profile() -> SetupProfile:
                                               profiles_mod._non_exportable_entries, dirs_exist_ok=True)
     _write_state(path, _FRESH_STATE)
     return SetupProfile(name, path, created=False)
+
+
+def primary_profile(launch_home: Path) -> str:
+    """The profile setup hands off to: the launch profile from the setup profile's home, else this one."""
+    home = get_hermes_home()
+    if (home / profiles_mod.SETUP_PROFILE_MARKER).is_file():
+        home = launch_home
+    return profile_name_for_home(home) or "default"
 
 
 def onboarding_eligible() -> bool:
