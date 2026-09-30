@@ -354,21 +354,28 @@ def _scan_now() -> tuple[dict, str]:
     return profile, "fresh"
 
 
-def _scan() -> tuple[dict | None, str]:
-    box: dict = {}
+def scan_into(box: dict) -> None:
+    """Scan and put ``result`` or ``error`` in ``box``. The ``/initiate-setup`` builder runs
+    this as its shared background job, so the first turn does not wait for a second scan."""
+    try:
+        box["result"] = _scan_now()
+    except Exception as exc:
+        box["error"] = type(exc).__name__
 
-    def work() -> None:
-        try:
-            box["result"] = _scan_now()
-        except Exception as exc:
-            box["error"] = type(exc).__name__
 
-    worker = threading.Thread(target=work, daemon=True)
-    worker.start()
+def scan_outcome(worker: threading.Thread, box: dict) -> tuple[dict | None, str]:
+    """Wait up to the deadline for ``worker`` running :func:`scan_into` on ``box``."""
     worker.join(SCAN_DEADLINE_S)
     if "result" in box:
         return box["result"]
     return None, box.get("error", "timeout")
+
+
+def _scan() -> tuple[dict | None, str]:
+    box: dict = {}
+    worker = threading.Thread(target=scan_into, args=(box,), daemon=True)
+    worker.start()
+    return scan_outcome(worker, box)
 
 
 def _value(profile: dict, fid: str) -> dict | None:
@@ -559,12 +566,10 @@ def _machine_state(scan: dict | None, age: int | None) -> tuple[str, int | None]
     return ("fresh" if age <= NEW_MACHINE_DAYS else "settling" if age < SETTLING_DAYS else "established"), age
 
 
-def collect(scan_json: Path | None = None) -> dict:
-    """Return the fact block the ``/initiate-setup`` first turn embeds."""
-    if scan_json is not None:
-        profile, source = _read_json(scan_json), "file"
-    else:
-        profile, source = _scan()
+def collect(scanned: tuple[dict | None, str] | None = None) -> dict:
+    """Return the fact block the ``/initiate-setup`` first turn embeds. ``scanned`` is a
+    ``(profile, source)`` pair from a scan already run; without it this scans now."""
+    profile, source = scanned if scanned is not None else _scan()
     scan = interpret(profile, source) if profile else {"source": "unavailable", "reason": source}
 
     os_family = facts.os_family()
@@ -625,7 +630,8 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--from-json", type=Path, help="interpret this saved scan instead of scanning")
     args = parser.parse_args()
-    print(json.dumps(collect(args.from_json), ensure_ascii=False, separators=(",", ":")))
+    scanned = (_read_json(args.from_json), "file") if args.from_json else None
+    print(json.dumps(collect(scanned), ensure_ascii=False, separators=(",", ":")))
 
 
 if __name__ == "__main__":
