@@ -42,6 +42,7 @@ def start_user_scan() -> _ScanJob:
 
     The worker inherits the caller's profile scope, so the scan caches into that home's
     ``insights/profile.json``. A finished job is not reused: the next start reads that cache.
+    Another process that scans the same home waits on this one through the scan's lease file.
     """
     from agent.memory_provider import spawn_context_thread
 
