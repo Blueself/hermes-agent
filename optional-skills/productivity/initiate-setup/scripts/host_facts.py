@@ -18,6 +18,7 @@ builder may also import ``collect()`` and embed its result.
 from __future__ import annotations
 
 import argparse
+import contextvars
 import json
 import os
 import platform
@@ -27,6 +28,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Callable
 
 from hermes_platform.host import facts, products, runtime
 
@@ -354,21 +356,27 @@ def _scan_now() -> tuple[dict, str]:
     return profile, "fresh"
 
 
-def _scan() -> tuple[dict | None, str]:
+def _in_background(work: Callable[[], Any]) -> Callable[[float], tuple[Any, str]]:
+    """Start ``work`` on a daemon thread under the caller's contextvars (its profile scope). The returned
+    join waits until ``deadline`` (``time.monotonic``) and gives ``(result, "")``, or ``(None, reason)``
+    when the work failed or is still running."""
     box: dict = {}
+    context = contextvars.copy_context()
 
-    def work() -> None:
+    def run() -> None:
         try:
-            box["result"] = _scan_now()
+            box["result"] = context.run(work)
         except Exception as exc:
             box["error"] = type(exc).__name__
 
-    worker = threading.Thread(target=work, daemon=True)
+    worker = threading.Thread(target=run, daemon=True)
     worker.start()
-    worker.join(SCAN_DEADLINE_S)
-    if "result" in box:
-        return box["result"]
-    return None, box.get("error", "timeout")
+
+    def join(deadline: float) -> tuple[Any, str]:
+        worker.join(max(0.0, deadline - time.monotonic()))
+        return (box["result"], "") if "result" in box else (None, box.get("error", "timeout"))
+
+    return join
 
 
 def _value(profile: dict, fid: str) -> dict | None:
@@ -550,18 +558,26 @@ def interpret(profile: dict, source: str) -> dict:
     return block
 
 
-def _blender_present(scan: dict) -> bool:
-    """Whether Blender is on this machine, judged like the plugins card and the installer judge it: the
-    resolver over the Blender plugin's pinned ``app:`` declaration. When that declaration cannot be read
-    (offline, or a pin that has none) the scan's app evidence decides."""
+def _blender_declared_state() -> str:
+    """Blender's state as the plugins card and the installer judge it: the resolver over the Blender
+    plugin's pinned ``app:`` declaration. Reading that declaration takes the network, so ``collect``
+    runs this beside the scan and under the same deadline."""
     from hermes_cli.plugin_catalog import get_live_catalog_entry
     from hermes_cli.plugin_catalog_presence import presence
 
     entry = get_live_catalog_entry("blender")
-    state = presence(entry).state if entry else "unknown"
-    if state == "unknown":
-        return "Blender" in [*(scan.get("apps_used") or []), *(scan.get("apps_installed_no_use_seen") or [])]
-    return state != "missing_app"
+    return presence(entry).state if entry else "unknown"
+
+
+def _blender_present(declared: str | None, profile: dict | None) -> bool:
+    """Only proof of absence hides the Blender task: the declaration says ``missing_app``, or, when the
+    declaration gave no answer, the scan's app inventory ran and has no Blender. No evidence keeps it."""
+    if declared not in (None, "unknown"):
+        return declared != "missing_app"
+    if not profile or _value(profile, "apps.taxonomy") is None:
+        return True
+    used, unused, _ = _scan_apps(profile)
+    return "Blender" in used + unused
 
 
 def _machine_state(scan: dict | None, age: int | None) -> tuple[str, int | None]:
@@ -575,10 +591,13 @@ def _machine_state(scan: dict | None, age: int | None) -> tuple[str, int | None]
 
 def collect(scan_json: Path | None = None) -> dict:
     """Return the fact block the ``/initiate-setup`` first turn embeds."""
+    deadline = time.monotonic() + SCAN_DEADLINE_S
+    blender = _in_background(_blender_declared_state)
     if scan_json is not None:
         profile, source = _read_json(scan_json), "file"
     else:
-        profile, source = _scan()
+        result, reason = _in_background(_scan_now)(deadline)
+        profile, source = result if result is not None else (None, reason)
     scan = interpret(profile, source) if profile else {"source": "unavailable", "reason": source}
 
     os_family = facts.os_family()
@@ -598,7 +617,7 @@ def collect(scan_json: Path | None = None) -> dict:
     leads = spark or looks_new
     kind = _machine_kind(os_family, spark)
     plugin_tasks = [_NVIDIA_TASK] if os_family == "win32" and gpu == "nvidia" else []
-    if _blender_present(scan):
+    if _blender_present(blender(deadline)[0], profile):
         plugin_tasks.append(_BLENDER_TASK)
 
     return {
