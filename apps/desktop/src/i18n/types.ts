@@ -4457,6 +4457,7 @@ export interface Translations {
       startingUntitled: string
       untitled: string
       notStarted: string
+      retry: string
       inProfile: (profile: string) => string
       open: string
       openFailed: string

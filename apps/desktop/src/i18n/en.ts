@@ -5353,7 +5353,8 @@ export const en: Translations = {
       starting: title => `Starting “${title}”…`,
       startingUntitled: 'Starting a chat…',
       untitled: 'New chat',
-      notStarted: "The chat didn't start",
+      notStarted: "Couldn't start that chat.",
+      retry: 'Retry',
       inProfile: profile => `In ${profile}`,
       open: 'Open',
       openFailed: "Couldn't open the chat"
