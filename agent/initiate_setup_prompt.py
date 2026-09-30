@@ -27,6 +27,7 @@ def _host_facts(skill_dir: Path) -> dict:
 
 def build_initiate_setup_prompt(surface: str, tools, primary_profile: str) -> str:
     from hermes_cli.anon_auth import free_tier_route
+    from hermes_cli.setup_profile import read_state
 
     skill_dir = _skill_dir()
     block = {
@@ -34,6 +35,7 @@ def build_initiate_setup_prompt(surface: str, tools, primary_profile: str) -> st
         "tools_present": sorted(set(tools)),
         "primary_profile": primary_profile,
         "guest_free_tier": free_tier_route(),
+        "setup_completed_at": read_state().get("completed_at"),
     }
     # Same bytes the hook prints when the skill loads through inline shell.
     host = json.dumps(_host_facts(skill_dir), ensure_ascii=False, separators=(",", ":"))
